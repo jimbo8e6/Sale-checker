@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+sale_checker.db
+sale_checker.log
