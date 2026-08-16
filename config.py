@@ -5,7 +5,7 @@ load_dotenv()
 
 # ── Location (Gumtree) ────────────────────────────────────────────────────────
 POSTCODE = os.getenv("POSTCODE", "LN11 9YX")
-RADIUS_MILES = int(os.getenv("RADIUS_MILES", "15"))
+RADIUS_MILES = int(os.getenv("RADIUS_MILES", "50"))
 
 # ── Shared filtering ──────────────────────────────────────────────────────────
 MIN_MARKUP_PCT = float(os.getenv("MIN_MARKUP_PCT", "100"))
