@@ -61,7 +61,7 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
     all_listings: List[Dict] = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=False)
         ctx = browser.new_context(
             user_agent=_UA,
             viewport={"width": 1440, "height": 900},

@@ -48,7 +48,7 @@ def browse_categories(
     seen_item_ids: set = set()
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=False)
         ctx = browser.new_context(
             user_agent=_UA,
             viewport={"width": 1366, "height": 768},
