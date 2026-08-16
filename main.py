@@ -1,32 +1,19 @@
 """
-Sale Checker — arbitrage scanner.
+Sale Checker — eBay UK arbitrage scanner.
 
-Sources:
-  • Gumtree  — private listings within RADIUS_MILES of POSTCODE
-  • eBay UK  — newly-listed Buy It Now items in configured categories
-
-Both sources are checked against eBay UK sold prices.
-Alerts fire via Telegram when markup >= MIN_MARKUP_PCT (default 100%).
+Scans eBay UK newly-listed Buy It Now items across configured categories,
+checks them against eBay UK sold prices, and alerts via Telegram when
+markup >= MIN_MARKUP_PCT (default 100%).
 
 Usage:
-    python main.py            # run both checks then loop every CHECK_INTERVAL_MINUTES
+    python main.py            # run then loop every CHECK_INTERVAL_MINUTES
     python main.py --once     # single pass then exit (good for cron)
-    python main.py --source gumtree   # only run Gumtree check in the loop
-    python main.py --source ebay      # only run eBay listings check in the loop
-
-Setup:
-    1. cp .env.example .env
-    2. Fill in TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
-    3. pip install -r requirements.txt
-    4. playwright install chromium
-    5. python main.py
 """
 
 import argparse
 import logging
 import sys
 import time
-from typing import Dict, List
 
 import schedule
 
@@ -35,7 +22,6 @@ from database import Database
 from notifier.telegram import send_alert
 from scrapers.ebay import get_average_sold_price
 from scrapers.ebay_listings import browse_categories
-from scrapers.gumtree import scrape_gumtree
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,15 +36,7 @@ log = logging.getLogger(__name__)
 db = Database(config.DB_PATH)
 
 
-# ── Shared processing ─────────────────────────────────────────────────────────
-
-def _process(listings: List[Dict], tag: str) -> None:
-    """
-    For each listing:
-      - skip if already seen or outside price range
-      - look up eBay sold average
-      - alert + record if markup threshold met
-    """
+def _process(listings, tag):
     for listing in listings:
         url = listing.get("url", "")
         title = listing.get("title", "").strip()
@@ -98,32 +76,10 @@ def _process(listings: List[Dict], tag: str) -> None:
             else:
                 db.record(url, title, price, ebay_avg, markup_pct, alerted=False)
 
-        time.sleep(2)  # rate-limit eBay sold-price queries
+        time.sleep(2)
 
 
-# ── Gumtree check ─────────────────────────────────────────────────────────────
-
-def run_gumtree_check() -> None:
-    log.info(
-        f"=== Gumtree check | {config.POSTCODE} +{config.RADIUS_MILES} mi ==="
-    )
-    try:
-        listings = scrape_gumtree(config.POSTCODE, config.RADIUS_MILES)
-    except Exception as e:
-        log.error(f"Gumtree scrape failed: {e}")
-        return
-
-    if not listings:
-        log.warning("No listings returned from Gumtree — site may have changed or blocked the scraper")
-        return
-
-    _process(listings, "Gumtree")
-    log.info(f"=== Gumtree check done | {db.recent_alert_count(24)} alerts today ===")
-
-
-# ── eBay listings check ───────────────────────────────────────────────────────
-
-def run_ebay_check() -> None:
+def run_ebay_check():
     cat_count = len(config.EBAY_CATEGORY_IDS)
     log.info(
         f"=== eBay listings check | {cat_count} categories | "
@@ -149,20 +105,12 @@ def run_ebay_check() -> None:
     log.info(f"=== eBay check done | {db.recent_alert_count(24)} alerts today ===")
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Arbitrage scanner")
+def main():
+    parser = argparse.ArgumentParser(description="eBay arbitrage scanner")
     parser.add_argument(
         "--once",
         action="store_true",
         help="Run a single pass then exit (useful for cron)",
-    )
-    parser.add_argument(
-        "--source",
-        choices=["gumtree", "ebay", "both"],
-        default="both",
-        help="Which source to check (default: both)",
     )
     args = parser.parse_args()
 
@@ -178,22 +126,12 @@ def main() -> None:
         f"min markup {config.MIN_MARKUP_PCT:.0f}%"
     )
 
-    run_gumtree = args.source in ("gumtree", "both")
-    run_ebay = args.source in ("ebay", "both")
-
-    if run_gumtree:
-        run_gumtree_check()
-    if run_ebay:
-        run_ebay_check()
+    run_ebay_check()
 
     if args.once:
         return
 
-    if run_gumtree:
-        schedule.every(config.CHECK_INTERVAL_MINUTES).minutes.do(run_gumtree_check)
-    if run_ebay:
-        schedule.every(config.CHECK_INTERVAL_MINUTES).minutes.do(run_ebay_check)
-
+    schedule.every(config.CHECK_INTERVAL_MINUTES).minutes.do(run_ebay_check)
     log.info(f"Scheduler running — checking every {config.CHECK_INTERVAL_MINUTES} minutes")
 
     while True:

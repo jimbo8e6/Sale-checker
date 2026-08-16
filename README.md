@@ -1,13 +1,14 @@
 # Sale Checker
 
-Arbitrage scanner that watches Gumtree and eBay UK for underpriced items and alerts you via Telegram when markup is above your threshold.
+eBay UK arbitrage scanner. Watches newly-listed Buy It Now items across chosen categories, checks them against eBay UK sold prices, and sends a Telegram alert when the potential markup meets your minimum threshold.
+
+---
 
 ## How it works
 
-1. Scrapes Gumtree for local private listings near your postcode
-2. Scrapes eBay UK for active Buy It Now listings in chosen categories
-3. Looks up the average eBay UK *sold* price for each item
-4. Sends a Telegram message when the potential markup meets your minimum
+1. Scans eBay UK for active Buy It Now listings in configured categories
+2. Looks up the average eBay UK *sold* price for each item
+3. Sends a Telegram message when the potential markup meets your minimum
 
 ---
 
@@ -42,24 +43,28 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 3 — Configure your `.env` file
+### 3 — Get an eBay API key (free)
+
+1. Go to **developer.ebay.com** and sign in with your normal eBay account
+2. Go to **My Account → Application Keysets → Production**
+3. Create a new keyset and copy your **App ID** and **Cert ID**
+
+### 4 — Configure your `.env` file
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in any editor and fill in at minimum:
+Open `.env` and fill in at minimum:
 
 | Variable | What it is |
 |---|---|
+| `EBAY_APP_ID` | Your eBay App ID (Client ID) from developer.ebay.com |
+| `EBAY_CERT_ID` | Your eBay Cert ID (Client Secret) from developer.ebay.com |
 | `TELEGRAM_BOT_TOKEN` | From [@BotFather](https://t.me/botfather) — send `/newbot` |
 | `TELEGRAM_CHAT_ID` | Your chat ID (see `.env.example` for instructions) |
-| `POSTCODE` | Your postcode for the Gumtree radius search |
-| `RADIUS_MILES` | How far from your postcode to scan |
 
-Everything else has sensible defaults and is optional to change.
-
-### 4 — Run
+### 5 — Run
 
 ```bash
 # Continuous loop (checks every CHECK_INTERVAL_MINUTES, default 30 min)
@@ -67,10 +72,6 @@ python main.py
 
 # Single pass then exit — useful for testing or cron
 python main.py --once
-
-# Only one source
-python main.py --source gumtree
-python main.py --source ebay
 ```
 
 Logs are written to `sale_checker.log` and also printed to the terminal.
@@ -125,12 +126,10 @@ launchctl unload ~/Library/LaunchAgents/com.salechecker.plist
 
 ## Configuration reference
 
-All settings live in `.env`. See `.env.example` for the full list with comments.
-
 | Variable | Default | Description |
 |---|---|---|
-| `POSTCODE` | `LN11 9YX` | Centre point for Gumtree search |
-| `RADIUS_MILES` | `15` | Search radius in miles |
+| `EBAY_APP_ID` | — | eBay API App ID (required) |
+| `EBAY_CERT_ID` | — | eBay API Cert ID (required) |
 | `MIN_PRICE` | `5` | Skip listings cheaper than this (£) |
 | `MAX_PRICE` | `500` | Skip listings more expensive than this (£) |
 | `MIN_MARKUP_PCT` | `100` | Minimum markup % to trigger an alert (100 = double your money) |
