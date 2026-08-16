@@ -1,9 +1,8 @@
 """
 eBay UK active-listings browser.
 
-Fetches newly-listed Buy It Now items in specified categories within a
-price range, returning them in the same dict format used by the Gumtree
-scraper so the same comparison + alert pipeline handles both sources.
+Uses Playwright (headless Chromium) to fetch newly-listed Buy It Now items
+in specified categories, bypassing eBay's bot-detection on plain HTTP requests.
 """
 
 import logging
@@ -11,31 +10,23 @@ import re
 import time
 from typing import Dict, List, Optional
 
-import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 log = logging.getLogger(__name__)
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-GB,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
+_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/121.0.0.0 Safari/537.36"
+)
 
-# Human-readable names used in log output
 CATEGORY_NAMES: Dict[int, str] = {
-    # Electronics
     293: "Sound & Vision",
     58058: "Computing",
     15032: "Mobile Phones",
     625: "Cameras & Photography",
-    # Video Games & Consoles
     1249: "Video Games & Consoles",
-    # Toys, Games & Collectibles
     220: "Toys & Games",
     1: "Collectibles",
 }
@@ -55,68 +46,99 @@ def browse_categories(
     all_listings: List[Dict] = []
     seen_item_ids: set = set()
 
-    for cat_id in category_ids:
-        cat_name = CATEGORY_NAMES.get(cat_id, str(cat_id))
-        log.info(f"eBay listings: scanning '{cat_name}' (cat {cat_id})")
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        ctx = browser.new_context(
+            user_agent=_UA,
+            viewport={"width": 1366, "height": 768},
+            locale="en-GB",
+        )
+        ctx.set_extra_http_headers({"Accept-Language": "en-GB,en;q=0.9"})
+        page = ctx.new_page()
 
-        for page_num in range(1, pages_per_cat + 1):
-            items = _fetch_page(cat_id, page_num, min_price, max_price, bin_only)
-            if not items:
-                log.debug(f"  page {page_num}: no results — stopping")
-                break
+        # Skip images/fonts to speed up loads
+        page.route(
+            "**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,otf}",
+            lambda r: r.abort(),
+        )
 
-            new = [i for i in items if i["item_id"] not in seen_item_ids]
-            for i in new:
-                seen_item_ids.add(i["item_id"])
-            all_listings.extend(new)
+        _accepted_cookies = False
 
-            log.debug(f"  page {page_num}: {len(items)} items, {len(new)} new")
+        for cat_id in category_ids:
+            cat_name = CATEGORY_NAMES.get(cat_id, str(cat_id))
+            log.info(f"eBay listings: scanning '{cat_name}' (cat {cat_id})")
 
-            if len(items) < 40:
-                break  # last page reached
+            for page_num in range(1, pages_per_cat + 1):
+                params = (
+                    f"_sacat={cat_id}&_sop=10"
+                    f"&_udlo={int(min_price)}&_udhi={int(max_price)}"
+                    f"&LH_PrefLoc=1&_pgn={page_num}"
+                    + ("&LH_BIN=1" if bin_only else "")
+                )
+                url = f"https://www.ebay.co.uk/sch/i.html?{params}"
 
-            time.sleep(2)
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+                    page.wait_for_timeout(2_000)
+                except PWTimeout:
+                    log.warning(f"eBay page timed out (cat {cat_id}, page {page_num})")
+                    break
+                except Exception as e:
+                    log.warning(f"eBay navigation error (cat {cat_id}, page {page_num}): {e}")
+                    break
 
-        time.sleep(3)  # courteous gap between categories
+                # Accept cookie banner once per session
+                if not _accepted_cookies:
+                    _accepted_cookies = _dismiss_consent(page)
+
+                items = _parse_listings(page.content(), min_price, max_price)
+                if not items:
+                    log.debug(f"  page {page_num}: no results — stopping")
+                    break
+
+                new = [i for i in items if i["item_id"] not in seen_item_ids]
+                for i in new:
+                    seen_item_ids.add(i["item_id"])
+                all_listings.extend(new)
+
+                log.debug(f"  page {page_num}: {len(items)} items, {len(new)} new")
+
+                if len(items) < 40:
+                    break  # last page reached
+
+                time.sleep(2)
+
+            time.sleep(3)  # courteous gap between categories
+
+        ctx.close()
+        browser.close()
 
     log.info(f"eBay listings total: {len(all_listings)} items across {len(category_ids)} categories")
     return all_listings
 
 
-# ── Internal ─────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _fetch_page(
-    cat_id: int,
-    page: int,
-    min_price: float,
-    max_price: float,
-    bin_only: bool,
-) -> List[Dict]:
-    params = {
-        "_sacat": cat_id,
-        "_sop": 10,           # sort: newly listed
-        "_udlo": int(min_price),
-        "_udhi": int(max_price),
-        "LH_PrefLoc": 1,      # UK sellers only
-        "_pgn": page,
-    }
-    if bin_only:
-        params["LH_BIN"] = 1  # Buy It Now only
-
+def _dismiss_consent(page) -> bool:
     try:
-        time.sleep(1.5)
-        resp = requests.get(
-            "https://www.ebay.co.uk/sch/i.html",
-            params=params,
-            headers=_HEADERS,
-            timeout=20,
-        )
-        resp.raise_for_status()
-    except Exception as e:
-        log.warning(f"eBay listings fetch failed (cat {cat_id}, page {page}): {e}")
-        return []
+        for sel in [
+            "button#gdpr-banner-accept",
+            "button[aria-label*='Accept']",
+            "button:has-text('Accept all')",
+            "button:has-text('Accept All')",
+        ]:
+            btn = page.query_selector(sel)
+            if btn:
+                btn.click()
+                page.wait_for_timeout(1_000)
+                return True
+    except Exception:
+        pass
+    return False
 
-    soup = BeautifulSoup(resp.text, "lxml")
+
+def _parse_listings(html: str, min_price: float, max_price: float) -> List[Dict]:
+    soup = BeautifulSoup(html, "lxml")
     listings: List[Dict] = []
 
     for item in soup.select("li.s-item"):
@@ -132,9 +154,8 @@ def _fetch_page(
             continue
 
         price_text = price_el.get_text(strip=True)
-        # Price ranges indicate auction bids — skip (ambiguous final price)
         if " to " in price_text.lower():
-            continue
+            continue  # price range = auction, skip
 
         price = _parse_price(price_text)
         if not price or price < min_price or price > max_price:
@@ -145,16 +166,12 @@ def _fetch_page(
         if not item_id:
             continue
 
-        # Canonical URL: strip tracking query params
-        clean_url = f"https://www.ebay.co.uk/itm/{item_id}"
-
         listings.append({
             "title": title,
             "price": price,
-            "url": clean_url,
+            "url": f"https://www.ebay.co.uk/itm/{item_id}",
             "item_id": item_id,
             "source": "ebay_listing",
-            "category_id": cat_id,
         })
 
     return listings

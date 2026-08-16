@@ -17,9 +17,9 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 log = logging.getLogger(__name__)
 
 _UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/121.0.0.0 Safari/537.36"
+    "Chrome/124.0.0.0 Safari/537.36"
 )
 
 # CSS selector sets tried in order for the DOM fallback
@@ -60,16 +60,18 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
     all_listings: List[Dict] = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
+        browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(
             user_agent=_UA,
-            viewport={"width": 1366, "height": 768},
+            viewport={"width": 1440, "height": 900},
             locale="en-GB",
+            timezone_id="Europe/London",
         )
-        ctx.set_extra_http_headers({"Accept-Language": "en-GB,en;q=0.9"})
+        ctx.set_extra_http_headers({
+            "Accept-Language": "en-GB,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Upgrade-Insecure-Requests": "1",
+        })
         page = ctx.new_page()
 
         # Drop images/fonts/ads to speed up page load
