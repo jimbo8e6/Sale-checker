@@ -113,7 +113,10 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
                 page_listings = _from_dom(page)
 
             if not page_listings:
-                log.info(f"No listings found on Gumtree page {page_num} — stopping pagination")
+                log.info(
+                    f"No listings found on Gumtree page {page_num} — stopping pagination "
+                    f"(title: {page.title()!r}, HTML length: {len(page.content())})"
+                )
                 break
 
             # Deduplicate across pages

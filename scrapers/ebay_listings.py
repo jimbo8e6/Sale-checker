@@ -102,9 +102,12 @@ def browse_categories(
                     log.warning(f"eBay could not read page content (cat {cat_id}, page {page_num}): {e}")
                     break
 
+                title = page.title()
+                log.info(f"  page title: {title!r}")
+
                 items = _parse_listings(html, min_price, max_price)
                 if not items:
-                    log.debug(f"  page {page_num}: no results — stopping")
+                    log.info(f"  page {page_num}: 0 items parsed (HTML length: {len(html)})")
                     break
 
                 new = [i for i in items if i["item_id"] not in seen_item_ids]
