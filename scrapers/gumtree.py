@@ -13,7 +13,7 @@ import time
 from typing import Dict, List, Optional
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from playwright_stealth import stealth_sync
+from scrapers._stealth import apply_stealth
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
             "Upgrade-Insecure-Requests": "1",
         })
         page = ctx.new_page()
-        stealth_sync(page)
+        apply_stealth(page)
 
         # Drop images/fonts/ads to speed up page load
         page.route(

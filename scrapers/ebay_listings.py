@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from playwright_stealth import stealth_sync
+from scrapers._stealth import apply_stealth
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def browse_categories(
         )
         ctx.set_extra_http_headers({"Accept-Language": "en-GB,en;q=0.9"})
         page = ctx.new_page()
-        stealth_sync(page)
+        apply_stealth(page)
 
         # Skip images/fonts to speed up loads
         page.route(
