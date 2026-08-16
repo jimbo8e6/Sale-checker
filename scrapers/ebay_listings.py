@@ -79,7 +79,12 @@ def browse_categories(
 
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-                    page.wait_for_timeout(2_000)
+                    # Wait for any JS-triggered redirects to settle
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=8_000)
+                    except PWTimeout:
+                        pass  # proceed if networkidle takes too long
+                    page.wait_for_timeout(1_000)
                 except PWTimeout:
                     log.warning(f"eBay page timed out (cat {cat_id}, page {page_num})")
                     break
@@ -91,7 +96,13 @@ def browse_categories(
                 if not _accepted_cookies:
                     _accepted_cookies = _dismiss_consent(page)
 
-                items = _parse_listings(page.content(), min_price, max_price)
+                try:
+                    html = page.content()
+                except Exception as e:
+                    log.warning(f"eBay could not read page content (cat {cat_id}, page {page_num}): {e}")
+                    break
+
+                items = _parse_listings(html, min_price, max_price)
                 if not items:
                     log.debug(f"  page {page_num}: no results — stopping")
                     break
