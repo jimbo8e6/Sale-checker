@@ -122,7 +122,16 @@ def browse_categories(
 
                 items = _parse_listings(html, min_price, max_price)
                 if not items:
-                    log.info(f"  page {page_num}: 0 items parsed (HTML length: {len(html)})")
+                    soup_debug = BeautifulSoup(html, "lxml")
+                    s_items = soup_debug.select("li.s-item")
+                    s_items2 = soup_debug.select(".s-item")
+                    body = soup_debug.get_text()[:300].replace("\n", " ")
+                    log.info(
+                        f"  page {page_num}: 0 items — "
+                        f"li.s-item={len(s_items)}, .s-item={len(s_items2)}, "
+                        f"HTML={len(html)}"
+                    )
+                    log.info(f"  body text: {body!r}")
                     break
 
                 new = [i for i in items if i["item_id"] not in seen_item_ids]
