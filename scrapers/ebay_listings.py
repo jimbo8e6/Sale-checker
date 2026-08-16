@@ -64,7 +64,20 @@ def browse_categories(
             lambda r: r.abort(),
         )
 
-        _accepted_cookies = False
+        # Warm up the session by visiting the homepage first
+        try:
+            page.goto("https://www.ebay.co.uk/", wait_until="domcontentloaded", timeout=30_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=8_000)
+            except PWTimeout:
+                pass
+            page.wait_for_timeout(2_000)
+            _dismiss_consent(page)
+            log.info(f"eBay session warmed up (title: {page.title()!r})")
+        except Exception as e:
+            log.warning(f"eBay homepage warm-up failed: {e}")
+
+        _accepted_cookies = True  # already dismissed above
 
         for cat_id in category_ids:
             cat_name = CATEGORY_NAMES.get(cat_id, str(cat_id))

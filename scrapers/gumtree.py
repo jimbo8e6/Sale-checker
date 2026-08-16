@@ -93,7 +93,11 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
 
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-                page.wait_for_timeout(3_000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8_000)
+                except PWTimeout:
+                    pass
+                page.wait_for_timeout(2_000)
             except PWTimeout:
                 log.warning(f"Gumtree page {page_num} timed out")
                 break
@@ -104,10 +108,13 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
             # Dismiss cookie/consent banner if present
             _dismiss_consent(page)
 
+            log.info(f"Gumtree page {page_num}: url={page.url!r} title={page.title()!r}")
+
             # --- Strategy 1: __NEXT_DATA__ ---
             raw_next = page.evaluate(
                 "document.getElementById('__NEXT_DATA__')?.textContent ?? null"
             )
+            log.info(f"  __NEXT_DATA__ present: {raw_next is not None} ({len(raw_next or '')} chars)")
             page_listings = _from_next_data(raw_next) if raw_next else []
 
             # --- Strategy 2: DOM walk ---
@@ -115,10 +122,12 @@ def scrape_gumtree(postcode: str, radius_miles: int = 15, max_pages: int = 3) ->
                 page_listings = _from_dom(page)
 
             if not page_listings:
+                html = page.content()
                 log.info(
                     f"No listings found on Gumtree page {page_num} — stopping pagination "
-                    f"(title: {page.title()!r}, HTML length: {len(page.content())})"
+                    f"(HTML length: {len(html)})"
                 )
+                log.info(f"  Page snippet: {html[1000:1300]!r}")
                 break
 
             # Deduplicate across pages
