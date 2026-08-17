@@ -1,26 +1,24 @@
 """
-eBay UK active-listings browser.
+eBay UK active-listings fetcher using the official eBay Browse API.
 
-Uses Playwright (headless Chromium) to fetch newly-listed Buy It Now items
-in specified categories, bypassing eBay's bot-detection on plain HTTP requests.
+Requires EBAY_APP_ID and EBAY_CERT_ID in .env (from developer.ebay.com).
+No browser or scraping involved — clean API calls only.
 """
 
+import base64
 import logging
-import re
 import time
 from typing import Dict, List, Optional
 
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from scrapers._stealth import apply_stealth
+import requests
+
+import config
 
 log = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/121.0.0.0 Safari/537.36"
-)
+_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
+_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+_SCOPE = "https://api.ebay.com/oauth/api_scope"
 
 CATEGORY_NAMES: Dict[int, str] = {
     293: "Sound & Vision",
@@ -32,6 +30,44 @@ CATEGORY_NAMES: Dict[int, str] = {
     1: "Collectibles",
 }
 
+_cached_token: Optional[str] = None
+_token_expiry: float = 0.0
+
+
+def _get_token() -> Optional[str]:
+    global _cached_token, _token_expiry
+
+    if _cached_token and time.time() < _token_expiry - 60:
+        return _cached_token
+
+    if not config.EBAY_APP_ID or not config.EBAY_CERT_ID:
+        log.error("EBAY_APP_ID and EBAY_CERT_ID must be set in .env")
+        return None
+
+    credentials = base64.b64encode(
+        f"{config.EBAY_APP_ID}:{config.EBAY_CERT_ID}".encode()
+    ).decode()
+
+    try:
+        resp = requests.post(
+            _TOKEN_URL,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={"grant_type": "client_credentials", "scope": _SCOPE},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _cached_token = data["access_token"]
+        _token_expiry = time.time() + data["expires_in"]
+        log.info("eBay API token obtained")
+        return _cached_token
+    except Exception as e:
+        log.error(f"eBay token request failed: {e}")
+        return None
+
 
 def browse_categories(
     category_ids: List[int],
@@ -41,190 +77,100 @@ def browse_categories(
     bin_only: bool = True,
 ) -> List[Dict]:
     """
-    Scrape newly-listed eBay UK items across all given category IDs.
-    Returns deduplicated listings sorted by category then page order.
+    Fetch newly-listed eBay UK items across all given category IDs via the Browse API.
+    Returns deduplicated listings.
     """
+    token = _get_token()
+    if not token:
+        return []
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB",
+        "Content-Type": "application/json",
+    }
+
+    filters = [
+        f"price:[{int(min_price)}..{int(max_price)}]",
+        "priceCurrency:GBP",
+        "itemLocationCountry:GB",
+    ]
+    if bin_only:
+        filters.append("buyingOptions:{FIXED_PRICE}")
+
+    filter_str = ",".join(filters)
+    limit = 200
     all_listings: List[Dict] = []
-    seen_item_ids: set = set()
+    seen_ids: set = set()
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
-        ctx = browser.new_context(
-            user_agent=_UA,
-            viewport={"width": 1366, "height": 768},
-            locale="en-GB",
-        )
-        ctx.set_extra_http_headers({"Accept-Language": "en-GB,en;q=0.9"})
-        page = ctx.new_page()
-        apply_stealth(page)
+    for cat_id in category_ids:
+        cat_name = CATEGORY_NAMES.get(cat_id, str(cat_id))
+        log.info(f"eBay API: scanning '{cat_name}' (cat {cat_id})")
 
-        # Skip images/fonts to speed up loads
-        page.route(
-            "**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,ttf,otf}",
-            lambda r: r.abort(),
-        )
-
-        # Warm up the session by visiting the homepage first
-        try:
-            page.goto("https://www.ebay.co.uk/", wait_until="domcontentloaded", timeout=30_000)
+        for page_num in range(pages_per_cat):
+            offset = page_num * limit
             try:
-                page.wait_for_load_state("networkidle", timeout=8_000)
-            except PWTimeout:
-                pass
-            page.wait_for_timeout(2_000)
-            _dismiss_consent(page)
-            log.info(f"eBay session warmed up (title: {page.title()!r})")
-        except Exception as e:
-            log.warning(f"eBay homepage warm-up failed: {e}")
-
-        _accepted_cookies = True  # already dismissed above
-
-        for cat_id in category_ids:
-            cat_name = CATEGORY_NAMES.get(cat_id, str(cat_id))
-            log.info(f"eBay listings: scanning '{cat_name}' (cat {cat_id})")
-
-            for page_num in range(1, pages_per_cat + 1):
-                params = (
-                    f"_sacat={cat_id}&_sop=10"
-                    f"&_udlo={int(min_price)}&_udhi={int(max_price)}"
-                    f"&LH_PrefLoc=1&_pgn={page_num}"
-                    + ("&LH_BIN=1" if bin_only else "")
+                resp = requests.get(
+                    _SEARCH_URL,
+                    headers=headers,
+                    params={
+                        "category_ids": cat_id,
+                        "filter": filter_str,
+                        "sort": "newlyListed",
+                        "limit": limit,
+                        "offset": offset,
+                    },
+                    timeout=20,
                 )
-                url = f"https://www.ebay.co.uk/sch/i.html?{params}"
+                resp.raise_for_status()
+            except Exception as e:
+                log.warning(f"eBay API request failed (cat {cat_id}, page {page_num + 1}): {e}")
+                break
+
+            data = resp.json()
+            items = data.get("itemSummaries", [])
+
+            if not items:
+                log.debug(f"  page {page_num + 1}: no results")
+                break
+
+            new_count = 0
+            for item in items:
+                item_id = item.get("itemId", "")
+                if item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+
+                title = item.get("title", "").strip()
+                price_info = item.get("price", {})
+                price_str = price_info.get("value", "")
+                url = item.get("itemWebUrl", "")
 
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-                    # Wait for any JS-triggered redirects to settle
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=8_000)
-                    except PWTimeout:
-                        pass  # proceed if networkidle takes too long
-                    page.wait_for_timeout(1_000)
-                except PWTimeout:
-                    log.warning(f"eBay page timed out (cat {cat_id}, page {page_num})")
-                    break
-                except Exception as e:
-                    log.warning(f"eBay navigation error (cat {cat_id}, page {page_num}): {e}")
-                    break
+                    price = float(price_str)
+                except (ValueError, TypeError):
+                    continue
 
-                # Accept cookie banner once per session
-                if not _accepted_cookies:
-                    _accepted_cookies = _dismiss_consent(page)
+                if not title or not url or not price:
+                    continue
 
-                try:
-                    html = page.content()
-                except Exception as e:
-                    log.warning(f"eBay could not read page content (cat {cat_id}, page {page_num}): {e}")
-                    break
+                all_listings.append({
+                    "title": title,
+                    "price": price,
+                    "url": url,
+                    "item_id": item_id,
+                    "source": "ebay_listing",
+                })
+                new_count += 1
 
-                title = page.title()
-                log.info(f"  page title: {title!r}")
+            log.info(f"  page {page_num + 1}: {new_count} new items")
 
-                items = _parse_listings(html, min_price, max_price)
-                if not items:
-                    soup_debug = BeautifulSoup(html, "lxml")
-                    s_items = soup_debug.select("li.s-item")
-                    s_items2 = soup_debug.select(".s-item")
-                    body = soup_debug.get_text()[:300].replace("\n", " ")
-                    log.info(
-                        f"  page {page_num}: 0 items — "
-                        f"li.s-item={len(s_items)}, .s-item={len(s_items2)}, "
-                        f"HTML={len(html)}"
-                    )
-                    log.info(f"  body text: {body!r}")
-                    break
+            if len(items) < limit:
+                break  # last page
 
-                new = [i for i in items if i["item_id"] not in seen_item_ids]
-                for i in new:
-                    seen_item_ids.add(i["item_id"])
-                all_listings.extend(new)
+            time.sleep(1)
 
-                log.debug(f"  page {page_num}: {len(items)} items, {len(new)} new")
+        time.sleep(1)
 
-                if len(items) < 40:
-                    break  # last page reached
-
-                time.sleep(2)
-
-            time.sleep(3)  # courteous gap between categories
-
-        ctx.close()
-        browser.close()
-
-    log.info(f"eBay listings total: {len(all_listings)} items across {len(category_ids)} categories")
+    log.info(f"eBay API total: {len(all_listings)} items across {len(category_ids)} categories")
     return all_listings
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _dismiss_consent(page) -> bool:
-    try:
-        for sel in [
-            "button#gdpr-banner-accept",
-            "button[aria-label*='Accept']",
-            "button:has-text('Accept all')",
-            "button:has-text('Accept All')",
-        ]:
-            btn = page.query_selector(sel)
-            if btn:
-                btn.click()
-                page.wait_for_timeout(1_000)
-                return True
-    except Exception:
-        pass
-    return False
-
-
-def _parse_listings(html: str, min_price: float, max_price: float) -> List[Dict]:
-    soup = BeautifulSoup(html, "lxml")
-    listings: List[Dict] = []
-
-    for item in soup.select("li.s-item"):
-        title_el = item.select_one("div.s-item__title, h3.s-item__title")
-        price_el = item.select_one("span.s-item__price")
-        link_el = item.select_one("a.s-item__link")
-
-        if not title_el or not price_el or not link_el:
-            continue
-
-        title = title_el.get_text(strip=True)
-        if title.lower() in ("shop on ebay", ""):
-            continue
-
-        price_text = price_el.get_text(strip=True)
-        if " to " in price_text.lower():
-            continue  # price range = auction, skip
-
-        price = _parse_price(price_text)
-        if not price or price < min_price or price > max_price:
-            continue
-
-        href = link_el.get("href", "")
-        item_id = _extract_item_id(href)
-        if not item_id:
-            continue
-
-        listings.append({
-            "title": title,
-            "price": price,
-            "url": f"https://www.ebay.co.uk/itm/{item_id}",
-            "item_id": item_id,
-            "source": "ebay_listing",
-        })
-
-    return listings
-
-
-def _extract_item_id(url: str) -> Optional[str]:
-    m = re.search(r"/itm/(?:[^/]+/)?(\d{10,})", url)
-    return m.group(1) if m else None
-
-
-def _parse_price(text: str) -> Optional[float]:
-    m = re.search(r"[\d,]+\.?\d*", text.replace(",", ""))
-    if m:
-        try:
-            return float(m.group().replace(",", ""))
-        except ValueError:
-            pass
-    return None

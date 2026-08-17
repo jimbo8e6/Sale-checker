@@ -26,6 +26,10 @@ EBAY_BIN_ONLY = os.getenv("EBAY_BIN_ONLY", "true").lower() == "true"
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "30"))
 
+# ── eBay API credentials ──────────────────────────────────────────────────────
+EBAY_APP_ID = os.getenv("EBAY_APP_ID", "")
+EBAY_CERT_ID = os.getenv("EBAY_CERT_ID", "")
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
