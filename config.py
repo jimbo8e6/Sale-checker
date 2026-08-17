@@ -19,7 +19,7 @@ EBAY_CATEGORY_IDS: list[int] = [
     if x.strip().isdigit()
 ]
 # Pages to fetch per category per run (each page ≈ 50 listings)
-EBAY_PAGES_PER_CATEGORY = int(os.getenv("EBAY_PAGES_PER_CATEGORY", "2"))
+EBAY_PAGES_PER_CATEGORY = int(os.getenv("EBAY_PAGES_PER_CATEGORY", "1"))
 # True = Buy It Now only (reliable fixed prices); False = include auctions
 EBAY_BIN_ONLY = os.getenv("EBAY_BIN_ONLY", "true").lower() == "true"
 

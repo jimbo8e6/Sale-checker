@@ -99,7 +99,7 @@ def browse_categories(
         filters.append("buyingOptions:{FIXED_PRICE}")
 
     filter_str = ",".join(filters)
-    limit = 200
+    limit = 50
     all_listings: List[Dict] = []
     seen_ids: set = set()
 
