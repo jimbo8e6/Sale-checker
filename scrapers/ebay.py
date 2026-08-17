@@ -5,6 +5,7 @@ Uses findCompletedItems to get recent sold prices for a search query,
 then returns a trimmed mean to use as the comparison price.
 """
 
+import base64
 import logging
 import re
 import time
@@ -16,7 +17,46 @@ import config
 
 log = logging.getLogger(__name__)
 
-_FINDING_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
+_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
+_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+_SCOPE = "https://api.ebay.com/oauth/api_scope"
+
+_cached_token: Optional[str] = None
+_token_expiry: float = 0.0
+
+
+def _get_token() -> Optional[str]:
+    global _cached_token, _token_expiry
+
+    if _cached_token and time.time() < _token_expiry - 60:
+        return _cached_token
+
+    if not config.EBAY_APP_ID or not config.EBAY_CERT_ID:
+        log.error("EBAY_APP_ID and EBAY_CERT_ID must be set in .env")
+        return None
+
+    credentials = base64.b64encode(
+        f"{config.EBAY_APP_ID}:{config.EBAY_CERT_ID}".encode()
+    ).decode()
+
+    try:
+        resp = requests.post(
+            _TOKEN_URL,
+            headers={
+                "Authorization": f"Basic {credentials}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={"grant_type": "client_credentials", "scope": _SCOPE},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _cached_token = data["access_token"]
+        _token_expiry = time.time() + data["expires_in"]
+        return _cached_token
+    except Exception as e:
+        log.error(f"eBay token request failed: {e}")
+        return None
 
 _NOISE_RE = re.compile(
     r"\b("
@@ -53,53 +93,40 @@ def _fetch_prices(query: str, max_results: int = 25, delay: float = 1.5) -> List
     if not clean:
         return []
 
-    if not config.EBAY_APP_ID:
-        log.error("EBAY_APP_ID not set — cannot look up sold prices")
+    token = _get_token()
+    if not token:
         return []
 
     time.sleep(delay)
 
-    params = {
-        "OPERATION-NAME": "findCompletedItems",
-        "SERVICE-VERSION": "1.0.0",
-        "SECURITY-APPNAME": config.EBAY_APP_ID,
-        "RESPONSE-DATA-FORMAT": "JSON",
-        "GLOBAL-ID": "EBAY-GB",
-        "keywords": clean,
-        "itemFilter(0).name": "SoldItemsOnly",
-        "itemFilter(0).value": "true",
-        "paginationInput.entriesPerPage": max_results,
-        "sortOrder": "EndTimeSoonest",
-    }
-
     try:
-        resp = requests.get(_FINDING_URL, params=params, timeout=20)
+        resp = requests.get(
+            _SEARCH_URL,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": "EBAY_GB",
+            },
+            params={
+                "q": clean,
+                "filter": "soldItemsOnly:true,priceCurrency:GBP",
+                "limit": max_results,
+            },
+            timeout=20,
+        )
         resp.raise_for_status()
     except Exception as e:
-        log.warning(f"eBay Finding API failed for {clean!r}: {e}")
+        log.warning(f"eBay sold price lookup failed for {clean!r}: {e}")
         return []
 
-    try:
-        data = resp.json()
-        items = (
-            data["findCompletedItemsResponse"][0]
-            ["searchResult"][0]
-            .get("item", [])
-        )
-    except (KeyError, IndexError, ValueError) as e:
-        log.warning(f"eBay Finding API unexpected response for {clean!r}: {e}")
-        return []
+    items = resp.json().get("itemSummaries", [])
 
     prices: List[float] = []
     for item in items:
         try:
-            price_str = (
-                item["sellingStatus"][0]["convertedCurrentPrice"][0]["__value__"]
-            )
-            price = float(price_str)
+            price = float(item["price"]["value"])
             if price > 0:
                 prices.append(price)
-        except (KeyError, IndexError, ValueError):
+        except (KeyError, ValueError, TypeError):
             continue
 
     log.debug(f"eBay sold: {len(prices)} prices for {clean!r}")
