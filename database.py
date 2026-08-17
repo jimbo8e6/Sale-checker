@@ -51,6 +51,15 @@ class Database:
                 (url, title, local_price, ebay_avg, markup_pct, int(alerted), now, now),
             )
 
+    def purge_old(self, days: int = 7) -> int:
+        from datetime import timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                "DELETE FROM seen_listings WHERE first_seen < ?", (cutoff,)
+            )
+            return cur.rowcount
+
     def recent_alert_count(self, hours: int = 24) -> int:
         from datetime import timedelta
         cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()

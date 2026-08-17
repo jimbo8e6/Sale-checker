@@ -80,6 +80,10 @@ def _process(listings, tag):
 
 
 def run_ebay_check():
+    purged = db.purge_old(days=7)
+    if purged:
+        log.debug(f"Purged {purged} listings older than 7 days")
+
     cat_count = len(config.EBAY_CATEGORY_IDS)
     log.info(
         f"=== eBay listings check | {cat_count} categories | "
