@@ -1,0 +1,9 @@
+services:
+  sale-checker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DB_PATH=/app/data/sale_checker.db
